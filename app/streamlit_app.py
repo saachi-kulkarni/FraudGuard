@@ -2,8 +2,6 @@ import streamlit as st
 import requests
 import json
 import pandas as pd
-import joblib
-import shap
 
 st.set_page_config(
     page_title="FraudGuard",
@@ -11,37 +9,23 @@ st.set_page_config(
     layout="centered"
 )
 
-# -----------------------------
-# Load ML Model
-# -----------------------------
-
-model = joblib.load("models/fraud_model.pkl")
-
-# SHAP explainer
-explainer = shap.TreeExplainer(model)
-
-
-# -----------------------------
-# Page Header
-# -----------------------------
+API_URL = "http://127.0.0.1:8000/predict"
 
 st.title("🛡️ FraudGuard")
 st.subheader("AI-Powered Credit Card Fraud Detection")
 
 st.write(
     "Analyze a credit card transaction using machine learning "
-    "and estimate the probability of fraud."
+    "and estimate its probability of being fraudulent."
 )
 
 st.markdown("---")
 
-
 # -----------------------------
-# Session State
+# Default transaction
 # -----------------------------
 
 if "features" not in st.session_state:
-
     st.session_state.features = {
         "Time": 0.0,
         "Amount": 149.62
@@ -52,7 +36,7 @@ if "features" not in st.session_state:
 
 
 # -----------------------------
-# Sample Transactions
+# Sample transactions
 # -----------------------------
 
 st.markdown("### 🧪 Try a Sample Transaction")
@@ -60,33 +44,25 @@ st.markdown("### 🧪 Try a Sample Transaction")
 col1, col2 = st.columns(2)
 
 with col1:
-
     if st.button(
         "🚨 Load Fraud Sample",
         use_container_width=True
     ):
-
         try:
-
             with open("data/fraud_test.json", "r") as f:
-                fraud_data = json.load(f)
-
-            st.session_state.features = fraud_data
+                st.session_state.features = json.load(f)
 
             st.success("Fraud sample loaded!")
 
         except Exception:
-
             st.error("Could not load fraud sample.")
 
 
 with col2:
-
     if st.button(
         "✅ Load Normal Sample",
         use_container_width=True
     ):
-
         st.session_state.features = {
             "Time": 0.0,
             "Amount": 149.62
@@ -99,7 +75,42 @@ with col2:
 
 
 # -----------------------------
-# Transaction Details
+# Upload JSON transaction
+# -----------------------------
+
+st.markdown("### 📁 Upload Transaction")
+
+uploaded_file = st.file_uploader(
+    "Upload a JSON transaction",
+    type=["json"]
+)
+
+if uploaded_file is not None:
+
+    try:
+        uploaded_data = json.load(uploaded_file)
+
+        required_features = ["Time", "Amount"] + [
+            f"V{i}" for i in range(1, 29)
+        ]
+
+        if all(feature in uploaded_data for feature in required_features):
+
+            st.session_state.features = uploaded_data
+
+            st.success("Transaction uploaded successfully!")
+
+        else:
+            st.error(
+                "Invalid JSON. It must contain Time, Amount and V1–V28."
+            )
+
+    except Exception:
+        st.error("Could not read the JSON file.")
+
+
+# -----------------------------
+# Transaction details
 # -----------------------------
 
 st.markdown("### 💳 Transaction Details")
@@ -117,14 +128,14 @@ st.session_state.features["Amount"] = st.number_input(
 
 
 # -----------------------------
-# Advanced Features
+# Advanced features
 # -----------------------------
 
-with st.expander("🔬 Advanced Transaction Features (V1–V28)"):
+with st.expander("🔬 Advanced Features (V1–V28)"):
 
     st.caption(
-        "These are PCA-transformed features from the original "
-        "credit card transaction dataset."
+        "V1–V28 are PCA-transformed features from the "
+        "credit card fraud dataset."
     )
 
     for i in range(1, 29):
@@ -138,11 +149,12 @@ with st.expander("🔬 Advanced Transaction Features (V1–V28)"):
         )
 
 
+st.markdown("---")
+
+
 # -----------------------------
 # Prediction
 # -----------------------------
-
-st.markdown("---")
 
 if st.button(
     "🔍 Check Transaction",
@@ -153,7 +165,7 @@ if st.button(
     try:
 
         response = requests.post(
-            "http://127.0.0.1:8000/predict",
+            API_URL,
             json=st.session_state.features,
             timeout=10
         )
@@ -163,18 +175,18 @@ if st.button(
             result = response.json()
 
             probability = result["fraud_probability"] * 100
+            threshold = result["threshold"]
 
             st.markdown("### 📊 Fraud Detection Result")
+
+            # -----------------------------
+            # Result
+            # -----------------------------
 
             if result["prediction"] == 1:
 
                 st.error(
                     "🚨 FRAUDULENT TRANSACTION DETECTED"
-                )
-
-                st.metric(
-                    "Fraud Probability",
-                    f"{probability:.2f}%"
                 )
 
             else:
@@ -183,72 +195,104 @@ if st.button(
                     "✅ TRANSACTION APPEARS NORMAL"
                 )
 
+            col1, col2 = st.columns(2)
+
+            with col1:
                 st.metric(
                     "Fraud Probability",
                     f"{probability:.2f}%"
                 )
 
+            with col2:
+                st.metric(
+                    "Decision Threshold",
+                    f"{threshold:.2f}"
+                )
+
+
+            st.progress(
+                min(probability / 100, 1.0)
+            )
+
 
             # -----------------------------
-            # SHAP Explanation
+            # SHAP explanation
             # -----------------------------
 
             st.markdown("---")
-            st.markdown("### 🔎 Why did the model make this decision?")
 
-            input_data = pd.DataFrame(
-                [st.session_state.features]
+            st.markdown(
+                "### 🔎 Why did the model make this decision?"
             )
 
-            shap_result = explainer(input_data)
-
-            shap_values = shap_result.values[0]
-
-            # Handle binary-output SHAP format if present
-            if len(shap_values.shape) > 1:
-                shap_values = shap_values[:, 1]
-
-            explanation = pd.DataFrame({
-                "Feature": input_data.columns,
-                "Impact": shap_values
-            })
-
-            explanation["Absolute Impact"] = (
-                explanation["Impact"].abs()
+            reasons = result.get(
+                "top_shap_reasons",
+                []
             )
 
-            explanation = explanation.sort_values(
-                "Absolute Impact",
-                ascending=False
-            ).head(5)
+            if reasons:
 
-            st.write(
-                "Top 5 features influencing this prediction:"
-            )
+                st.write(
+                    "Top features influencing this prediction:"
+                )
 
-            for _, row in explanation.iterrows():
+                explanation_data = []
 
-                feature = row["Feature"]
-                impact = row["Impact"]
+                for reason in reasons:
 
-                if impact > 0:
+                    feature = reason["feature"]
+                    impact = reason["impact"]
+                    direction = reason["reason"]
 
-                    st.write(
-                        f"🔴 **{feature}** → increased fraud risk"
-                    )
+                    explanation_data.append({
+                        "Feature": feature,
+                        "SHAP Impact": impact,
+                        "Effect": direction
+                    })
 
-                else:
+                    if impact > 0:
 
-                    st.write(
-                        f"🟢 **{feature}** → decreased fraud risk"
-                    )
+                        st.write(
+                            f"🔴 **{feature}** → "
+                            f"increased fraud risk"
+                        )
+
+                    else:
+
+                        st.write(
+                            f"🟢 **{feature}** → "
+                            f"decreased fraud risk"
+                        )
+
+
+                # -----------------------------
+                # SHAP visual
+                # -----------------------------
+
+                st.markdown("#### SHAP Impact")
+
+                chart_data = pd.DataFrame(
+                    explanation_data
+                )
+
+                chart_data = chart_data.set_index(
+                    "Feature"
+                )[["SHAP Impact"]]
+
+                st.bar_chart(chart_data)
+
+
+            else:
+
+                st.info(
+                    "No SHAP explanation returned."
+                )
 
 
         else:
 
             st.error(
-                "API returned an error. "
-                "Please check the Docker container."
+                f"API error: {response.status_code}"
             )
 
 
@@ -259,10 +303,11 @@ if st.button(
             "Make sure the Docker container is running."
         )
 
+
     except Exception as e:
 
         st.error(
-            f"SHAP explanation error: {e}"
+            f"Something went wrong: {e}"
         )
 
 

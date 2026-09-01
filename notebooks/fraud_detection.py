@@ -1,38 +1,37 @@
 import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import (
-    classification_report,
-    precision_score,
-    recall_score,
-    f1_score,
-    average_precision_score,
-    confusion_matrix,
-    precision_recall_curve
-)
-
-from imblearn.over_sampling import SMOTE
-from xgboost import XGBClassifier
 import joblib
 
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    classification_report,
+    average_precision_score
+)
 
-# ==========================================
-# 1. LOAD DATA
-# ==========================================
+from imblearn.pipeline import Pipeline
+from imblearn.over_sampling import SMOTE
+
+from xgboost import XGBClassifier
+
+
+# =========================
+# 1. Load dataset
+# =========================
 
 df = pd.read_csv("data/creditcard.csv")
-
-print("Dataset shape:", df.shape)
 
 X = df.drop("Class", axis=1)
 y = df["Class"]
 
+print("Dataset shape:", X.shape)
+print("Fraud transactions:", sum(y == 1))
+print("Normal transactions:", sum(y == 0))
 
-# ==========================================
-# 2. TRAIN / TEST SPLIT
-# ==========================================
+
+# =========================
+# 2. Train-test split
+# =========================
 
 X_train, X_test, y_train, y_test = train_test_split(
     X,
@@ -42,14 +41,102 @@ X_train, X_test, y_train, y_test = train_test_split(
     stratify=y
 )
 
-print("\nBefore SMOTE:")
-print("Normal:", sum(y_train == 0))
-print("Fraud:", sum(y_train == 1))
+
+# =========================
+# 3. Logistic Regression
+# + StandardScaler + SMOTE
+# =========================
+
+print("\n==============================")
+print("Logistic Regression + Scaling + SMOTE")
+print("==============================")
+
+lr_smote = Pipeline([
+    ("scaler", StandardScaler()),
+    ("smote", SMOTE(random_state=42)),
+    ("model", LogisticRegression(
+        max_iter=1000,
+        random_state=42
+    ))
+])
+
+lr_smote.fit(X_train, y_train)
+
+lr_smote_prob = lr_smote.predict_proba(X_test)[:, 1]
+
+lr_smote_pred = (
+    lr_smote_prob >= 0.80
+).astype(int)
+
+print(
+    classification_report(
+        y_test,
+        lr_smote_pred,
+        digits=4
+    )
+)
+
+lr_smote_auc = average_precision_score(
+    y_test,
+    lr_smote_prob
+)
+
+print(
+    f"AUC-PR: {lr_smote_auc:.4f}"
+)
 
 
-# ==========================================
-# 3. HANDLE CLASS IMBALANCE
-# ==========================================
+# =========================
+# 4. Logistic Regression
+# + StandardScaler + Class Weight
+# =========================
+
+print("\n==============================")
+print("Logistic Regression + Scaling + Class Weight")
+print("==============================")
+
+lr_weighted = Pipeline([
+    ("scaler", StandardScaler()),
+    ("model", LogisticRegression(
+        max_iter=1000,
+        class_weight="balanced",
+        random_state=42
+    ))
+])
+
+lr_weighted.fit(X_train, y_train)
+
+lr_weighted_prob = lr_weighted.predict_proba(X_test)[:, 1]
+
+lr_weighted_pred = (
+    lr_weighted_prob >= 0.80
+).astype(int)
+
+print(
+    classification_report(
+        y_test,
+        lr_weighted_pred,
+        digits=4
+    )
+)
+
+lr_weighted_auc = average_precision_score(
+    y_test,
+    lr_weighted_prob
+)
+
+print(
+    f"AUC-PR: {lr_weighted_auc:.4f}"
+)
+
+
+# =========================
+# 5. XGBoost + SMOTE
+# =========================
+
+print("\n==============================")
+print("XGBoost + SMOTE")
+print("==============================")
 
 smote = SMOTE(random_state=42)
 
@@ -58,18 +145,7 @@ X_train_smote, y_train_smote = smote.fit_resample(
     y_train
 )
 
-print("\nAfter SMOTE:")
-print("Normal:", sum(y_train_smote == 0))
-print("Fraud:", sum(y_train_smote == 1))
-
-
-# ==========================================
-# 4. TRAIN XGBOOST
-# ==========================================
-
-print("\nTraining XGBoost...")
-
-model = XGBClassifier(
+xgb_smote = XGBClassifier(
     n_estimators=200,
     max_depth=6,
     learning_rate=0.1,
@@ -79,168 +155,95 @@ model = XGBClassifier(
     eval_metric="logloss"
 )
 
-model.fit(X_train_smote, y_train_smote)
-
-print("Training complete!")
-
-
-# ==========================================
-# 5. GET FRAUD PROBABILITIES
-# ==========================================
-
-y_probability = model.predict_proba(X_test)[:, 1]
-
-# Default threshold
-threshold = 0.50
-
-y_pred = (y_probability >= threshold).astype(int)
-
-
-# ==========================================
-# 6. MODEL RESULTS
-# ==========================================
-
-print("\n==========================================")
-print("           FRAUDGUARD RESULTS")
-print("==========================================")
-
-print("\nClassification Report:")
-print(classification_report(y_test, y_pred))
-
-precision = precision_score(y_test, y_pred)
-recall = recall_score(y_test, y_pred)
-f1 = f1_score(y_test, y_pred)
-auc_pr = average_precision_score(y_test, y_probability)
-
-print("Precision:", precision)
-print("Recall:", recall)
-print("F1 Score:", f1)
-print("AUC-PR:", auc_pr)
-
-
-# ==========================================
-# 7. CONFUSION MATRIX
-# ==========================================
-
-cm = confusion_matrix(y_test, y_pred)
-
-print("\nConfusion Matrix:")
-print(cm)
-
-plt.figure(figsize=(7, 6))
-
-plt.imshow(cm)
-
-plt.title("Fraud Detection Confusion Matrix")
-plt.xlabel("Predicted")
-plt.ylabel("Actual")
-
-plt.xticks([0, 1], ["Normal", "Fraud"])
-plt.yticks([0, 1], ["Normal", "Fraud"])
-
-for i in range(2):
-    for j in range(2):
-        plt.text(j, i, cm[i, j],
-                 ha="center",
-                 va="center",
-                 fontsize=16)
-
-plt.colorbar()
-plt.tight_layout()
-
-plt.savefig("models/confusion_matrix.png")
-plt.show()
-
-
-# ==========================================
-# 8. PRECISION-RECALL CURVE
-# ==========================================
-
-precision_curve, recall_curve, thresholds = precision_recall_curve(
-    y_test,
-    y_probability
+xgb_smote.fit(
+    X_train_smote,
+    y_train_smote
 )
 
-plt.figure(figsize=(8, 6))
+xgb_prob = xgb_smote.predict_proba(X_test)[:, 1]
 
-plt.plot(recall_curve, precision_curve)
+xgb_pred = (
+    xgb_prob >= 0.80
+).astype(int)
 
-plt.xlabel("Recall")
-plt.ylabel("Precision")
-plt.title("Precision-Recall Curve")
-
-plt.grid(True)
-plt.tight_layout()
-
-plt.savefig("models/precision_recall_curve.png")
-plt.show()
-
-
-# ==========================================
-# 9. THRESHOLD ANALYSIS
-# ==========================================
-
-print("\n==========================================")
-print("         THRESHOLD ANALYSIS")
-print("==========================================")
-
-thresholds_to_test = [
-    0.10,
-    0.20,
-    0.30,
-    0.40,
-    0.50,
-    0.60,
-    0.70,
-    0.80,
-    0.90
-]
-
-print("\nThreshold | Precision | Recall | F1")
-print("-------------------------------------")
-
-for t in thresholds_to_test:
-
-    predictions = (y_probability >= t).astype(int)
-
-    p = precision_score(
+print(
+    classification_report(
         y_test,
-        predictions,
-        zero_division=0
+        xgb_pred,
+        digits=4
     )
+)
 
-    r = recall_score(
-        y_test,
-        predictions,
-        zero_division=0
+xgb_auc = average_precision_score(
+    y_test,
+    xgb_prob
+)
+
+print(
+    f"AUC-PR: {xgb_auc:.4f}"
+)
+
+
+# =========================
+# 6. Final comparison
+# =========================
+
+print("\n==============================")
+print("FINAL MODEL COMPARISON")
+print("==============================")
+
+print(
+    f"Logistic + SMOTE:       {lr_smote_auc:.4f}"
+)
+
+print(
+    f"Logistic + Weighting:   {lr_weighted_auc:.4f}"
+)
+
+print(
+    f"XGBoost + SMOTE:        {xgb_auc:.4f}"
+)
+
+
+# =========================
+# 7. Select best model
+# =========================
+
+models = {
+    "Logistic Regression + SMOTE": (
+        lr_smote_auc,
+        lr_smote
+    ),
+    "Logistic Regression + Weighting": (
+        lr_weighted_auc,
+        lr_weighted
+    ),
+    "XGBoost + SMOTE": (
+        xgb_auc,
+        xgb_smote
     )
+}
 
-    f = f1_score(
-        y_test,
-        predictions,
-        zero_division=0
-    )
+best_name = max(
+    models,
+    key=lambda name: models[name][0]
+)
 
-    print(
-        f"{t:9.2f} | "
-        f"{p:9.3f} | "
-        f"{r:6.3f} | "
-        f"{f:5.3f}"
-    )
+best_auc, best_model = models[best_name]
+
+print("\nBest model:", best_name)
+print(f"Best AUC-PR: {best_auc:.4f}")
 
 
-# ==========================================
-# 10. SAVE MODEL
-# ==========================================
+# =========================
+# 8. Save best model
+# =========================
 
 joblib.dump(
-    model,
+    best_model,
     "models/fraud_model.pkl"
 )
 
-print("\nModel saved to:")
-print("models/fraud_model.pkl")
-
-print("\n==========================================")
-print("             PROJECT STEP DONE")
-print("==========================================")
+print(
+    "\nBest model saved to models/fraud_model.pkl"
+)

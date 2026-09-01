@@ -2,9 +2,13 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 import pandas as pd
 import joblib
+import shap
 
 
-# Create FastAPI app
+# --------------------------------
+# FastAPI application
+# --------------------------------
+
 app = FastAPI(
     title="FraudGuard API",
     description="Credit Card Fraud Detection API",
@@ -12,11 +16,26 @@ app = FastAPI(
 )
 
 
+# --------------------------------
 # Load trained model
+# --------------------------------
+
 model = joblib.load("models/fraud_model.pkl")
 
+explainer = shap.TreeExplainer(model)
 
-# Input format
+
+# --------------------------------
+# Operating threshold
+# --------------------------------
+
+THRESHOLD = 0.80
+
+
+# --------------------------------
+# Transaction input
+# --------------------------------
+
 class Transaction(BaseModel):
     Time: float
     V1: float
@@ -50,7 +69,10 @@ class Transaction(BaseModel):
     Amount: float
 
 
+# --------------------------------
 # Home endpoint
+# --------------------------------
+
 @app.get("/")
 def home():
     return {
@@ -58,23 +80,82 @@ def home():
     }
 
 
-# Fraud prediction endpoint
+# --------------------------------
+# Prediction endpoint
+# --------------------------------
+
 @app.post("/predict")
 def predict(transaction: Transaction):
 
-    data = pd.DataFrame([transaction.model_dump()])
+    # Convert input into DataFrame
+    data = pd.DataFrame(
+        [transaction.model_dump()]
+    )
 
+    # Get fraud probability
     probability = model.predict_proba(data)[0][1]
 
-    prediction = 1 if probability >= 0.50 else 0
+    # Apply selected operating threshold
+    prediction = 1 if probability >= THRESHOLD else 0
 
-    if prediction == 1:
-        result = "Fraud"
-    else:
-        result = "Normal"
+    result = "Fraud" if prediction == 1 else "Normal"
+
+
+    # --------------------------------
+    # SHAP explanation
+    # --------------------------------
+
+    shap_result = explainer(data)
+
+    shap_values = shap_result.values[0]
+
+    # Handle possible multi-output SHAP format
+    if len(shap_values.shape) > 1:
+        shap_values = shap_values[:, 1]
+
+
+    explanation = pd.DataFrame({
+        "feature": data.columns,
+        "impact": shap_values
+    })
+
+    explanation["absolute_impact"] = (
+        explanation["impact"].abs()
+    )
+
+    explanation = explanation.sort_values(
+        "absolute_impact",
+        ascending=False
+    ).head(5)
+
+
+    # Create simple explanations
+    reasons = []
+
+    for _, row in explanation.iterrows():
+
+        if row["impact"] > 0:
+            direction = "increased fraud risk"
+        else:
+            direction = "decreased fraud risk"
+
+        reasons.append({
+            "feature": row["feature"],
+            "impact": round(float(row["impact"]), 4),
+            "reason": direction
+        })
+
+
+    # --------------------------------
+    # API response
+    # --------------------------------
 
     return {
         "prediction": prediction,
         "result": result,
-        "fraud_probability": round(float(probability), 4)
+        "fraud_probability": round(
+            float(probability), 4
+        ),
+        "threshold": THRESHOLD,
+        "top_shap_reasons": reasons
     }
