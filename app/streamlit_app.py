@@ -1,164 +1,180 @@
-import streamlit as st
-import requests
 import json
+import os
+import requests
+import streamlit as st
 import pandas as pd
+import matplotlib.pyplot as plt
 
 st.set_page_config(
     page_title="FraudGuard",
     page_icon="🛡️",
-    layout="centered"
+    layout="wide"
 )
 
 API_URL = "http://127.0.0.1:8000/predict"
 
+FEATURES = [
+    "Time",
+    "V1", "V2", "V3", "V4", "V5", "V6", "V7",
+    "V8", "V9", "V10", "V11", "V12", "V13", "V14",
+    "V15", "V16", "V17", "V18", "V19", "V20", "V21",
+    "V22", "V23", "V24", "V25", "V26", "V27", "V28",
+    "Amount"
+]
+
 st.title("🛡️ FraudGuard")
-st.subheader("AI-Powered Credit Card Fraud Detection")
+st.subheader("Real-Time Fraud Detection & Investigation")
 
 st.write(
-    "Analyze a credit card transaction using machine learning "
-    "and estimate its probability of being fraudulent."
+    "XGBoost + Isolation Forest → Risk Score → "
+    "Investigator Agent → Decision Agent"
 )
 
-st.markdown("---")
+st.divider()
 
-# -----------------------------
-# Default transaction
-# -----------------------------
+# ---------------------------------------------------------
+# TRANSACTION INPUT
+# ---------------------------------------------------------
 
-if "features" not in st.session_state:
-    st.session_state.features = {
-        "Time": 0.0,
-        "Amount": 149.62
-    }
+st.header("💳 Transaction")
 
-    for i in range(1, 29):
-        st.session_state.features[f"V{i}"] = 0.0
-
-
-# -----------------------------
-# Sample transactions
-# -----------------------------
-
-st.markdown("### 🧪 Try a Sample Transaction")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    if st.button(
-        "🚨 Load Fraud Sample",
-        use_container_width=True
-    ):
-        try:
-            with open("data/fraud_test.json", "r") as f:
-                st.session_state.features = json.load(f)
-
-            st.success("Fraud sample loaded!")
-
-        except Exception:
-            st.error("Could not load fraud sample.")
-
-
-with col2:
-    if st.button(
-        "✅ Load Normal Sample",
-        use_container_width=True
-    ):
-        st.session_state.features = {
-            "Time": 0.0,
-            "Amount": 149.62
-        }
-
-        for i in range(1, 29):
-            st.session_state.features[f"V{i}"] = 0.0
-
-        st.success("Normal sample loaded!")
-
-
-# -----------------------------
-# Upload JSON transaction
-# -----------------------------
-
-st.markdown("### 📁 Upload Transaction")
-
-uploaded_file = st.file_uploader(
-    "Upload a JSON transaction",
-    type=["json"]
+choice = st.radio(
+    "Choose transaction",
+    ["Upload JSON", "Sample Normal", "Sample Fraud"],
+    horizontal=False
 )
 
-if uploaded_file is not None:
+transaction = None
 
-    try:
-        uploaded_data = json.load(uploaded_file)
+if choice == "Upload JSON":
 
-        required_features = ["Time", "Amount"] + [
-            f"V{i}" for i in range(1, 29)
-        ]
-
-        if all(feature in uploaded_data for feature in required_features):
-
-            st.session_state.features = uploaded_data
-
-            st.success("Transaction uploaded successfully!")
-
-        else:
-            st.error(
-                "Invalid JSON. It must contain Time, Amount and V1–V28."
-            )
-
-    except Exception:
-        st.error("Could not read the JSON file.")
-
-
-# -----------------------------
-# Transaction details
-# -----------------------------
-
-st.markdown("### 💳 Transaction Details")
-
-st.session_state.features["Time"] = st.number_input(
-    "Transaction Time",
-    value=float(st.session_state.features["Time"])
-)
-
-st.session_state.features["Amount"] = st.number_input(
-    "Transaction Amount",
-    min_value=0.0,
-    value=float(st.session_state.features["Amount"])
-)
-
-
-# -----------------------------
-# Advanced features
-# -----------------------------
-
-with st.expander("🔬 Advanced Features (V1–V28)"):
-
-    st.caption(
-        "V1–V28 are PCA-transformed features from the "
-        "credit card fraud dataset."
+    uploaded = st.file_uploader(
+        "Upload transaction JSON",
+        type=["json"]
     )
 
-    for i in range(1, 29):
+    if uploaded:
+        try:
+            transaction = json.load(uploaded)
 
-        feature = f"V{i}"
+            missing = [
+                feature
+                for feature in FEATURES
+                if feature not in transaction
+            ]
 
-        st.session_state.features[feature] = st.number_input(
-            feature,
-            value=float(st.session_state.features[feature]),
-            format="%.6f"
+            if missing:
+                st.error(
+                    "Missing features: "
+                    + ", ".join(missing)
+                )
+                transaction = None
+            else:
+                st.success("Transaction JSON loaded.")
+
+        except Exception as e:
+            st.error(f"Invalid JSON: {e}")
+
+elif choice == "Sample Normal":
+
+    try:
+        with open("data/fraud_test.json") as f:
+            samples = json.load(f)
+
+        if isinstance(samples, list):
+            normal = next(
+                (x for x in samples if x.get("Class", 0) == 0),
+                samples[0]
+            )
+        else:
+            normal = samples
+
+        transaction = {
+            feature: float(normal[feature])
+            for feature in FEATURES
+        }
+
+        st.success("Sample Normal transaction loaded.")
+
+    except Exception as e:
+        st.error(f"Could not load sample: {e}")
+
+elif choice == "Sample Fraud":
+
+    try:
+        with open("data/fraud_test.json") as f:
+            samples = json.load(f)
+
+        if isinstance(samples, list):
+            fraud = next(
+                (x for x in samples if x.get("Class", 0) == 1),
+                samples[0]
+            )
+        else:
+            fraud = samples
+
+        transaction = {
+            feature: float(fraud[feature])
+            for feature in FEATURES
+        }
+
+        st.success("Sample Fraud transaction loaded.")
+
+    except Exception as e:
+        st.error(f"Could not load sample: {e}")
+
+
+# ---------------------------------------------------------
+# MANUAL INPUT
+# ---------------------------------------------------------
+
+if transaction is None:
+
+    st.info(
+        "Upload a JSON transaction or enter values manually below."
+    )
+
+    transaction = {}
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        transaction["Time"] = st.number_input(
+            "Time",
+            value=0.0
         )
 
+        transaction["Amount"] = st.number_input(
+            "Amount",
+            value=100.0
+        )
 
-st.markdown("---")
+    with col2:
+
+        st.write("V1–V28")
+
+        for feature in FEATURES[1:-1]:
+
+            transaction[feature] = st.number_input(
+                feature,
+                value=0.0
+            )
 
 
-# -----------------------------
-# Prediction
-# -----------------------------
+else:
+
+    st.write(
+        f"**Amount:** {transaction['Amount']:.2f}"
+    )
+
+
+# ---------------------------------------------------------
+# ANALYZE
+# ---------------------------------------------------------
 
 if st.button(
-    "🔍 Check Transaction",
-    use_container_width=True,
+    "🔍 Analyze Transaction",
     type="primary"
 ):
 
@@ -166,64 +182,92 @@ if st.button(
 
         response = requests.post(
             API_URL,
-            json=st.session_state.features,
-            timeout=10
+            json=transaction,
+            timeout=30
         )
 
-        if response.status_code == 200:
+        if response.status_code != 200:
+
+            st.error(
+                f"API Error: {response.status_code}"
+            )
+
+        else:
 
             result = response.json()
 
-            probability = result["fraud_probability"] * 100
-            threshold = result["threshold"]
+            st.divider()
 
-            st.markdown("### 📊 Fraud Detection Result")
+            # -------------------------------------------------
+            # DETECTION RESULT
+            # -------------------------------------------------
 
-            # -----------------------------
-            # Result
-            # -----------------------------
+            st.header("📊 Detection Result")
 
-            if result["prediction"] == 1:
+            col1, col2, col3, col4 = st.columns(4)
 
-                st.error(
-                    "🚨 FRAUDULENT TRANSACTION DETECTED"
-                )
+            xgb_score = result.get(
+                "xgb_probability",
+                result.get("fraud_probability", 0)
+            )
 
-            else:
+            anomaly_score = result.get(
+                "anomaly_score",
+                result.get("if_score", 0)
+            )
 
-                st.success(
-                    "✅ TRANSACTION APPEARS NORMAL"
-                )
+            risk_score = result.get(
+                "risk_score",
+                result.get("fraud_probability", 0)
+            )
 
-            col1, col2 = st.columns(2)
+            threshold = result.get(
+                "threshold",
+                0.80
+            )
 
             with col1:
                 st.metric(
-                    "Fraud Probability",
-                    f"{probability:.2f}%"
+                    "XGBoost",
+                    f"{xgb_score * 100:.2f}%"
                 )
 
             with col2:
                 st.metric(
-                    "Decision Threshold",
-                    f"{threshold:.2f}"
+                    "Anomaly Score",
+                    f"{anomaly_score * 100:.2f}%"
                 )
 
+            with col3:
+                st.metric(
+                    "Risk Score",
+                    f"{risk_score * 100:.2f}%"
+                )
 
-            st.progress(
-                min(probability / 100, 1.0)
+            with col4:
+                st.metric(
+                    "Threshold",
+                    f"{threshold * 100:.0f}%"
+                )
+
+            prediction = result.get(
+                "prediction",
+                1 if risk_score >= threshold else 0
             )
 
+            if prediction == 1:
 
-            # -----------------------------
-            # SHAP explanation
-            # -----------------------------
+                st.error("🚨 FRAUD DETECTED")
 
-            st.markdown("---")
+            else:
 
-            st.markdown(
-                "### 🔎 Why did the model make this decision?"
-            )
+                st.success("✅ TRANSACTION ALLOWED")
+
+            # -------------------------------------------------
+            # SHAP EXPLANATION
+            # -------------------------------------------------
+
+            st.header("🔎 Model Explanation")
 
             reasons = result.get(
                 "top_shap_reasons",
@@ -232,77 +276,82 @@ if st.button(
 
             if reasons:
 
-                st.write(
-                    "Top features influencing this prediction:"
-                )
-
-                explanation_data = []
-
                 for reason in reasons:
 
-                    feature = reason["feature"]
-                    impact = reason["impact"]
-                    direction = reason["reason"]
+                    feature = reason.get(
+                        "feature",
+                        "Unknown"
+                    )
 
-                    explanation_data.append({
-                        "Feature": feature,
-                        "SHAP Impact": impact,
-                        "Effect": direction
-                    })
+                    impact = reason.get(
+                        "impact",
+                        0
+                    )
 
-                    if impact > 0:
+                    explanation = reason.get(
+                        "reason",
+                        ""
+                    )
 
-                        st.write(
-                            f"🔴 **{feature}** → "
-                            f"increased fraud risk"
-                        )
+                    st.write(
+                        f"**{feature}** — "
+                        f"{explanation} "
+                        f"(impact: {impact:.4f})"
+                    )
 
-                    else:
+            # -------------------------------------------------
+            # MULTI-AGENT INVESTIGATION
+            # -------------------------------------------------
 
-                        st.write(
-                            f"🟢 **{feature}** → "
-                            f"decreased fraud risk"
-                        )
+            st.header("🤖 Multi-Agent Investigation")
 
-
-                # -----------------------------
-                # SHAP visual
-                # -----------------------------
-
-                st.markdown("#### SHAP Impact")
-
-                chart_data = pd.DataFrame(
-                    explanation_data
+            investigator = result.get(
+                "investigator_explanation",
+                result.get(
+                    "investigator",
+                    ""
                 )
-
-                chart_data = chart_data.set_index(
-                    "Feature"
-                )[["SHAP Impact"]]
-
-                st.bar_chart(chart_data)
-
-
-            else:
-
-                st.info(
-                    "No SHAP explanation returned."
-                )
-
-
-        else:
-
-            st.error(
-                f"API error: {response.status_code}"
             )
 
+            decision = result.get(
+                "decision",
+                result.get(
+                    "decision_agent",
+                    ""
+                )
+            )
+
+            st.info(
+                f"🕵️ **Investigator Agent**\n\n"
+                f"{investigator if investigator else 'No investigation explanation returned.'}"
+            )
+
+            if decision:
+
+                if "AUTO-BLOCK" in decision:
+
+                    st.error(
+                        f"🛑 **Decision Agent: {decision}**"
+                    )
+
+                elif "REVIEW" in decision:
+
+                    st.warning(
+                        f"⚠️ **Decision Agent: {decision}**"
+                    )
+
+                else:
+
+                    st.success(
+                        f"✅ **Decision Agent: {decision}**"
+                    )
 
     except requests.exceptions.ConnectionError:
 
         st.error(
-            "❌ Could not connect to FraudGuard API. "
-            "Make sure the Docker container is running."
+            "❌ Cannot connect to FraudGuard API. "
+            "Make sure FastAPI is running on port 8000."
         )
-
 
     except Exception as e:
 
@@ -311,12 +360,42 @@ if st.button(
         )
 
 
-# -----------------------------
-# Footer
-# -----------------------------
+# ---------------------------------------------------------
+# THROUGHPUT BENCHMARK
+# ---------------------------------------------------------
 
-st.markdown("---")
+st.divider()
+
+st.header("⚡ Real-Time Throughput Benchmark")
+
+st.write(
+    "FraudGuard compares sequential scoring with "
+    "concurrent transaction processing."
+)
+
+benchmark_path = "models/throughput_benchmark.png"
+
+if os.path.exists(benchmark_path):
+
+    st.image(
+        benchmark_path,
+        caption="Sequential vs Concurrent Transaction Throughput"
+    )
+
+else:
+
+    st.warning(
+        "Throughput benchmark image not found."
+    )
+
+
+# ---------------------------------------------------------
+# FOOTER
+# ---------------------------------------------------------
+
+st.divider()
 
 st.caption(
-    "FraudGuard • XGBoost + SMOTE • SHAP • FastAPI • Docker"
+    "FraudGuard • XGBoost • Isolation Forest • SHAP • "
+    "FastAPI • Multi-Agent Decision Layer • Concurrent Processing"
 )

@@ -3,41 +3,41 @@ from pydantic import BaseModel
 import pandas as pd
 import joblib
 import shap
+import sys
 
+sys.path.append("src")
+from agents import run_agents
 
-# --------------------------------
-# FastAPI application
-# --------------------------------
 
 app = FastAPI(
     title="FraudGuard API",
-    description="Credit Card Fraud Detection API",
-    version="1.0"
+    description="Real-Time Fraud Detection and Investigation API",
+    version="2.0"
 )
 
 
-# --------------------------------
-# Load trained model
-# --------------------------------
+# Load models
+xgb_model = joblib.load("models/fraud_model.pkl")
+if_model = joblib.load("models/isolation_forest.pkl")
+if_meta = joblib.load("models/isolation_forest_meta.pkl")
+ensemble_config = joblib.load("models/ensemble_config.pkl")
 
-model = joblib.load("models/fraud_model.pkl")
-
-explainer = shap.TreeExplainer(model)
-
-
-# --------------------------------
-# Operating threshold
-# --------------------------------
-
-THRESHOLD = 0.80
+explainer = shap.TreeExplainer(xgb_model)
 
 
-# --------------------------------
-# Transaction input
-# --------------------------------
+# Ensemble configuration
+XGB_WEIGHT = ensemble_config["xgb_weight"]
+IF_WEIGHT = ensemble_config["if_weight"]
+ENSEMBLE_THRESHOLD = ensemble_config["threshold"]
+
+IF_MIN = if_meta["if_min"]
+IF_MAX = if_meta["if_max"]
+
 
 class Transaction(BaseModel):
+
     Time: float
+
     V1: float
     V2: float
     V3: float
@@ -66,53 +66,73 @@ class Transaction(BaseModel):
     V26: float
     V27: float
     V28: float
+
     Amount: float
 
 
-# --------------------------------
-# Home endpoint
-# --------------------------------
-
 @app.get("/")
 def home():
+
     return {
         "message": "FraudGuard API is running!"
     }
 
 
-# --------------------------------
-# Prediction endpoint
-# --------------------------------
-
 @app.post("/predict")
 def predict(transaction: Transaction):
 
-    # Convert input into DataFrame
     data = pd.DataFrame(
         [transaction.model_dump()]
     )
 
-    # Get fraud probability
-    probability = model.predict_proba(data)[0][1]
 
-    # Apply selected operating threshold
-    prediction = 1 if probability >= THRESHOLD else 0
+    # -----------------------------
+    # XGBoost
+    # -----------------------------
 
-    result = "Fraud" if prediction == 1 else "Normal"
+    xgb_score = xgb_model.predict_proba(data)[0][1]
 
 
-    # --------------------------------
-    # SHAP explanation
-    # --------------------------------
+    # -----------------------------
+    # Isolation Forest
+    # -----------------------------
+
+    raw_score = -if_model.decision_function(data)[0]
+
+    if_score = (
+        (raw_score - IF_MIN)
+        / (IF_MAX - IF_MIN)
+    )
+
+    if_score = max(
+        0,
+        min(1, if_score)
+    )
+
+
+    # -----------------------------
+    # Combined Risk Score
+    # -----------------------------
+
+    risk_score = (
+        XGB_WEIGHT * xgb_score
+        + IF_WEIGHT * if_score
+    )
+
+    flagged = (
+        risk_score >= ENSEMBLE_THRESHOLD
+    )
+
+
+    # -----------------------------
+    # SHAP Explanation
+    # -----------------------------
 
     shap_result = explainer(data)
-
     shap_values = shap_result.values[0]
 
-    # Handle possible multi-output SHAP format
     if len(shap_values.shape) > 1:
         shap_values = shap_values[:, 1]
-
 
     explanation = pd.DataFrame({
         "feature": data.columns,
@@ -129,33 +149,74 @@ def predict(transaction: Transaction):
     ).head(5)
 
 
-    # Create simple explanations
     reasons = []
 
     for _, row in explanation.iterrows():
 
-        if row["impact"] > 0:
-            direction = "increased fraud risk"
-        else:
-            direction = "decreased fraud risk"
+        direction = (
+            "increased fraud risk"
+            if row["impact"] > 0
+            else "decreased fraud risk"
+        )
 
         reasons.append({
             "feature": row["feature"],
-            "impact": round(float(row["impact"]), 4),
+            "impact": round(
+                float(row["impact"]),
+                4
+            ),
             "reason": direction
         })
 
 
-    # --------------------------------
-    # API response
-    # --------------------------------
+    # -----------------------------
+    # Multi-Agent Investigation
+    # -----------------------------
+
+    agents = None
+
+    if flagged:
+
+        agents = run_agents({
+            "xgb_score": xgb_score,
+            "if_score": if_score,
+            "risk_score": risk_score,
+            "shap_reasons": reasons
+        })
+
+
+    # -----------------------------
+    # API Response
+    # -----------------------------
 
     return {
-        "prediction": prediction,
-        "result": result,
-        "fraud_probability": round(
-            float(probability), 4
+
+        "prediction": int(flagged),
+
+        "result": (
+            "Fraud"
+            if flagged
+            else "Normal"
         ),
-        "threshold": THRESHOLD,
-        "top_shap_reasons": reasons
+
+        "xgb_score": round(
+            float(xgb_score),
+            4
+        ),
+
+        "if_score": round(
+            float(if_score),
+            4
+        ),
+
+        "risk_score": round(
+            float(risk_score),
+            4
+        ),
+
+        "threshold": ENSEMBLE_THRESHOLD,
+
+        "top_shap_reasons": reasons,
+
+        "agents": agents
     }
