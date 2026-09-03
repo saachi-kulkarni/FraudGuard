@@ -1,8 +1,6 @@
 import json
-import os
 import requests
 import streamlit as st
-
 
 st.set_page_config(
     page_title="FraudGuard",
@@ -10,541 +8,187 @@ st.set_page_config(
     layout="wide"
 )
 
-
-API_URL = "http://127.0.0.1:8000/predict"
-
-
-FEATURES = [
-    "Time",
-    "V1", "V2", "V3", "V4", "V5", "V6", "V7",
-    "V8", "V9", "V10", "V11", "V12", "V13", "V14",
-    "V15", "V16", "V17", "V18", "V19", "V20", "V21",
-    "V22", "V23", "V24", "V25", "V26", "V27",
-    "V28", "Amount"
-]
-
-
-# =========================================================
-# HEADER
-# =========================================================
-
-st.title("🛡️ FraudGuard")
-
-st.subheader(
-    "Real-Time Fraud Detection & Investigation"
-)
-
-st.write(
-    "XGBoost + Isolation Forest → Risk Score → "
-    "Investigator Agent → Decision Agent"
+st.title("🛡️ Transaction Risk Scoring Dashboard")
+st.caption(
+    "Real-time transaction risk detection using ensemble ML, "
+    "SHAP explainability, and decision agents"
 )
 
 st.divider()
 
-
-# =========================================================
-# TRANSACTION INPUT
-# =========================================================
-
-st.header("💳 Transaction")
-
-
-choice = st.radio(
-    "Choose transaction",
-    [
-        "Upload JSON",
-        "Sample Normal",
-        "Sample Fraud"
-    ],
-    horizontal=False
+mode = st.radio(
+    "Choose transaction input",
+    ["Upload JSON", "Sample Normal", "Sample High-Risk"],
+    horizontal=True
 )
-
 
 transaction = None
 
-
-# =========================================================
-# UPLOAD JSON
-# =========================================================
-
-if choice == "Upload JSON":
-
-    uploaded = st.file_uploader(
+if mode == "Upload JSON":
+    uploaded_file = st.file_uploader(
         "Upload transaction JSON",
         type=["json"]
     )
 
-    if uploaded:
+    if uploaded_file:
+        try:
+            transaction = json.load(uploaded_file)
+            st.success("Transaction loaded successfully.")
+        except Exception:
+            st.error("Invalid JSON file.")
+
+elif mode == "Sample Normal":
+    transaction = {
+        "Time": 406.0,
+        "V1": -1.359807,
+        "V2": -0.072781,
+        "V3": 2.536347,
+        "V4": 1.378155,
+        "V5": -0.338321,
+        "V6": 0.462388,
+        "V7": 0.239599,
+        "V8": 0.098698,
+        "V9": 0.363787,
+        "V10": 0.090794,
+        "V11": -0.5516,
+        "V12": -0.617801,
+        "V13": -0.99139,
+        "V14": -0.311169,
+        "V15": 1.468177,
+        "V16": -0.4704,
+        "V17": 0.207971,
+        "V18": 0.025791,
+        "V19": 0.403993,
+        "V20": 0.251412,
+        "V21": -0.018307,
+        "V22": 0.277838,
+        "V23": -0.110474,
+        "V24": 0.066928,
+        "V25": 0.128539,
+        "V26": -0.189115,
+        "V27": 0.133558,
+        "V28": -0.021053,
+        "Amount": 2.69
+    }
+
+elif mode == "Sample High-Risk":
+    try:
+        with open("data/fraud_test.json") as f:
+            transaction = json.load(f)
+    except Exception:
+        st.error("Could not load sample transaction.")
+
+if transaction:
+
+    if st.button("🔍 Analyze Transaction", type="primary"):
 
         try:
+            response = requests.post(
+                "http://127.0.0.1:8000/predict",
+                json=transaction,
+                timeout=30
+            )
 
-            transaction = json.load(uploaded)
-
-            missing = [
-                feature
-                for feature in FEATURES
-                if feature not in transaction
-            ]
-
-            if missing:
-
-                st.error(
-                    "Missing features: "
-                    + ", ".join(missing)
-                )
-
-                transaction = None
+            if response.status_code != 200:
+                st.error(f"API error: {response.status_code}")
 
             else:
+                result = response.json()
 
-                transaction = {
-                    feature: float(transaction[feature])
-                    for feature in FEATURES
-                }
+                st.subheader("Risk Assessment")
 
-                st.success(
-                    "Transaction JSON loaded."
+                col1, col2, col3, col4 = st.columns(4)
+
+                col1.metric(
+                    "XGBoost Risk",
+                    f"{result['xgb_score'] * 100:.2f}%"
                 )
 
-        except Exception as e:
-
-            st.error(
-                f"Invalid JSON: {e}"
-            )
-
-
-# =========================================================
-# SAMPLE NORMAL
-# =========================================================
-
-elif choice == "Sample Normal":
-
-    try:
-
-        with open("data/fraud_test.json") as f:
-            samples = json.load(f)
-
-        if isinstance(samples, list):
-
-            normal = next(
-                (
-                    x for x in samples
-                    if x.get("Class", 0) == 0
-                ),
-                samples[0]
-            )
-
-        else:
-
-            normal = samples
-
-        transaction = {
-            feature: float(normal[feature])
-            for feature in FEATURES
-        }
-
-        st.success(
-            "Sample Normal transaction loaded."
-        )
-
-    except Exception as e:
-
-        st.error(
-            f"Could not load sample: {e}"
-        )
-
-
-# =========================================================
-# SAMPLE FRAUD
-# =========================================================
-
-elif choice == "Sample Fraud":
-
-    try:
-
-        with open("data/fraud_test.json") as f:
-            samples = json.load(f)
-
-        if isinstance(samples, list):
-
-            fraud = next(
-                (
-                    x for x in samples
-                    if x.get("Class", 0) == 1
-                ),
-                samples[0]
-            )
-
-        else:
-
-            fraud = samples
-
-        transaction = {
-            feature: float(fraud[feature])
-            for feature in FEATURES
-        }
-
-        st.success(
-            "Sample Fraud transaction loaded."
-        )
-
-    except Exception as e:
-
-        st.error(
-            f"Could not load sample: {e}"
-        )
-
-
-# =========================================================
-# MANUAL INPUT
-# =========================================================
-
-if transaction is None:
-
-    st.info(
-        "Upload a JSON transaction or enter "
-        "the transaction values manually below."
-    )
-
-    transaction = {}
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-
-        transaction["Time"] = st.number_input(
-            "Time",
-            value=0.0
-        )
-
-        transaction["Amount"] = st.number_input(
-            "Amount",
-            value=100.0
-        )
-
-    with col2:
-
-        st.write("V1–V28")
-
-        for feature in FEATURES[1:-1]:
-
-            transaction[feature] = st.number_input(
-                feature,
-                value=0.0
-            )
-
-
-else:
-
-    st.write(
-        f"**Amount:** {transaction['Amount']:.2f}"
-    )
-
-
-# =========================================================
-# ANALYZE TRANSACTION
-# =========================================================
-
-if st.button(
-    "🔍 Analyze Transaction",
-    type="primary"
-):
-
-    try:
-
-        response = requests.post(
-            API_URL,
-            json=transaction,
-            timeout=30
-        )
-
-
-        # -------------------------------------------------
-        # API ERROR
-        # -------------------------------------------------
-
-        if response.status_code != 200:
-
-            st.error(
-                f"API Error: {response.status_code}"
-            )
-
-            st.code(response.text)
-
-
-        else:
-
-            result = response.json()
-
-
-            # =================================================
-            # DETECTION RESULT
-            # =================================================
-
-            st.divider()
-
-            st.header("📊 Detection Result")
-
-
-            xgb_score = result.get(
-                "xgb_score",
-                0
-            )
-
-            anomaly_score = result.get(
-                "if_score",
-                0
-            )
-
-            risk_score = result.get(
-                "risk_score",
-                0
-            )
-
-            threshold = result.get(
-                "threshold",
-                0.80
-            )
-
-            prediction = result.get(
-                "prediction",
-                0
-            )
-
-
-            col1, col2, col3, col4 = st.columns(4)
-
-
-            with col1:
-
-                st.metric(
-                    "XGBoost",
-                    f"{xgb_score * 100:.2f}%"
-                )
-
-
-            with col2:
-
-                st.metric(
+                col2.metric(
                     "Anomaly Score",
-                    f"{anomaly_score * 100:.2f}%"
+                    f"{result['if_score'] * 100:.2f}%"
                 )
 
-
-            with col3:
-
-                st.metric(
-                    "Risk Score",
-                    f"{risk_score * 100:.2f}%"
+                col3.metric(
+                    "Overall Risk",
+                    f"{result['risk_score'] * 100:.2f}%"
                 )
 
-
-            with col4:
-
-                st.metric(
-                    "Threshold",
-                    f"{threshold * 100:.0f}%"
+                col4.metric(
+                    "Decision Threshold",
+                    f"{result['threshold'] * 100:.0f}%"
                 )
 
+                if result["prediction"] == 1:
+                    st.error("🚨 HIGH RISK TRANSACTION")
+                else:
+                    st.success("✅ LOW RISK TRANSACTION")
 
-            # =================================================
-            # FINAL RESULT
-            # =================================================
+                st.divider()
 
-            if prediction == 1:
+                st.subheader("🔎 SHAP-Based Explanation")
 
-                st.error(
-                    "🚨 FRAUD DETECTED"
-                )
+                for reason in result["top_shap_reasons"]:
 
-            else:
-
-                st.success(
-                    "✅ TRANSACTION ALLOWED"
-                )
-
-
-            # =================================================
-            # SHAP EXPLANATION
-            # =================================================
-
-            st.header("🔎 Model Explanation")
-
-
-            reasons = result.get(
-                "top_shap_reasons",
-                []
-            )
-
-
-            if reasons:
-
-                for reason in reasons:
-
-                    feature = reason.get(
-                        "feature",
-                        "Unknown"
-                    )
-
-                    impact = reason.get(
-                        "impact",
-                        0
-                    )
-
-                    explanation = reason.get(
-                        "reason",
-                        ""
+                    direction = (
+                        "increased risk"
+                        if reason["impact"] > 0
+                        else "decreased risk"
                     )
 
                     st.write(
-                        f"**{feature}** — "
-                        f"{explanation} "
-                        f"(impact: {impact:.4f})"
+                        f"**{reason['feature']}** — "
+                        f"{direction} "
+                        f"(impact: {reason['impact']:.4f})"
                     )
 
-            else:
+                if result.get("agents"):
 
-                st.info(
-                    "No SHAP explanation returned."
-                )
+                    st.divider()
+                    st.subheader("🤖 Decision Layer")
 
+                    agents = result["agents"]
 
-            # =================================================
-            # MULTI-AGENT INVESTIGATION
-            # =================================================
+                    st.write(
+                        f"**Investigator:** "
+                        f"{agents['explanation']}"
+                    )
 
-            st.header(
-                "🤖 Multi-Agent Investigation"
+                    if agents["decision"] == "AUTO-BLOCK":
+                        st.error(
+                            f"**Final Decision: {agents['decision']}**"
+                        )
+
+                    elif agents["decision"] == "FLAG FOR REVIEW":
+                        st.warning(
+                            f"**Final Decision: {agents['decision']}**"
+                        )
+
+                    else:
+                        st.success(
+                            f"**Final Decision: {agents['decision']}**"
+                        )
+
+                st.divider()
+
+                st.subheader("⚡ Throughput Benchmark")
+
+                try:
+                    st.image(
+                        "models/throughput_benchmark.png",
+                        caption=(
+                            "Sequential vs concurrent "
+                            "transaction processing"
+                        )
+                    )
+                except Exception:
+                    st.info("Benchmark chart unavailable.")
+
+        except requests.exceptions.ConnectionError:
+            st.error(
+                "Could not connect to FraudGuard API. "
+                "Make sure the FastAPI server is running."
             )
 
-
-            agents = result.get(
-                "agents"
-            )
-
-
-            if agents:
-
-                investigator = agents.get(
-                    "explanation",
-                    "No investigation explanation returned."
-                )
-
-                decision = agents.get(
-                    "decision",
-                    "No decision returned."
-                )
-
-
-                # -------------------------------------------------
-                # INVESTIGATOR
-                # -------------------------------------------------
-
-                st.info(
-                    f"🕵️ **Investigator Agent**\n\n"
-                    f"{investigator}"
-                )
-
-
-                # -------------------------------------------------
-                # DECISION AGENT
-                # -------------------------------------------------
-
-                if "AUTO-BLOCK" in decision:
-
-                    st.error(
-                        f"🛑 **Decision Agent: {decision}**"
-                    )
-
-                elif "REVIEW" in decision:
-
-                    st.warning(
-                        f"⚠️ **Decision Agent: {decision}**"
-                    )
-
-                else:
-
-                    st.success(
-                        f"✅ **Decision Agent: {decision}**"
-                    )
-
-            else:
-
-                st.info(
-                    "Transaction was not sent to the "
-                    "agent layer because it was not flagged."
-                )
-
-
-    # =========================================================
-    # CONNECTION ERROR
-    # =========================================================
-
-    except requests.exceptions.ConnectionError:
-
-        st.error(
-            "❌ Cannot connect to FraudGuard API. "
-            "Make sure FastAPI is running on port 8000."
-        )
-
-
-    # =========================================================
-    # OTHER ERROR
-    # =========================================================
-
-    except Exception as e:
-
-        st.error(
-            f"Something went wrong: {e}"
-        )
-
-
-# =========================================================
-# THROUGHPUT BENCHMARK
-# =========================================================
-
-st.divider()
-
-st.header(
-    "⚡ Real-Time Throughput Benchmark"
-)
-
-st.write(
-    "FraudGuard compares sequential scoring "
-    "with concurrent transaction processing."
-)
-
-
-benchmark_path = (
-    "models/throughput_benchmark.png"
-)
-
-
-if os.path.exists(benchmark_path):
-
-    st.image(
-        benchmark_path,
-        caption=(
-            "Sequential vs Concurrent "
-            "Transaction Throughput"
-        )
-    )
-
-else:
-
-    st.warning(
-        "Throughput benchmark image not found."
-    )
-
-
-# =========================================================
-# FOOTER
-# =========================================================
-
-st.divider()
-
-st.caption(
-    "FraudGuard • XGBoost • Isolation Forest • SHAP • "
-    "FastAPI • Multi-Agent Decision Layer • "
-    "Concurrent Processing"
-)
+        except Exception as e:
+            st.error(f"Unexpected error: {e}")

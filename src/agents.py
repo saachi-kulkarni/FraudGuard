@@ -1,18 +1,14 @@
 class InvestigatorAgent:
-
     def investigate(self, result):
-
         try:
             return self.llm_explanation(result)
         except Exception:
             return self.fallback_explanation(result)
 
     def llm_explanation(self, result):
-
         raise RuntimeError("LLM not enabled")
 
     def fallback_explanation(self, result):
-
         risk = result["risk_score"]
         xgb = result["xgb_score"]
         isolation = result["if_score"]
@@ -31,7 +27,7 @@ class InvestigatorAgent:
 
         return (
             f"Fallback investigation: transaction has "
-            f"{level} fraud risk (risk score={risk:.3f}). "
+            f"{level} transaction risk (risk score={risk:.3f}). "
             f"XGBoost probability={xgb:.3f}, "
             f"Isolation Forest anomaly score={isolation:.3f}. "
             f"Top contributing features: {top_reasons}."
@@ -39,9 +35,7 @@ class InvestigatorAgent:
 
 
 class DecisionAgent:
-
     def decide(self, result):
-
         risk = result["risk_score"]
 
         if risk >= 0.90:
@@ -54,7 +48,6 @@ class DecisionAgent:
 
 
 def run_agents(result):
-
     investigator = InvestigatorAgent()
     decision = DecisionAgent()
 

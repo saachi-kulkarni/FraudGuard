@@ -1,57 +1,47 @@
 # FraudGuard
 
-FraudGuard is a real-time fraud detection system that combines supervised machine learning, anomaly detection, explainability, concurrent transaction processing, and an investigation/decision layer.
+### Real-Time Transaction Risk Detection for Payment Platforms
 
-The goal is to detect known fraud patterns with XGBoost while also using Isolation Forest to identify unusual transactions that may not match previously seen fraud patterns.
+FraudGuard is an end-to-end transaction risk detection system designed for payment-platform style workloads. It combines supervised learning for known fraud patterns with unsupervised anomaly detection for potentially novel patterns, while providing explainable risk signals for downstream decisions.
 
----
-
-## Features
-
-- XGBoost fraud classification
-- Class imbalance handling with `scale_pos_weight`
-- Isolation Forest anomaly detection
-- Ensemble risk scoring
-- SHAP-based explanations
-- Concurrent transaction processing
-- Throughput benchmarking
-- Investigator and Decision agents
-- Deterministic fallback when an LLM is unavailable
-- FastAPI REST API
-- Streamlit dashboard
-- Docker support
+The system supports real-time transaction scoring, concurrent processing, SHAP-based explanations, and a modular Investigator + Decision agent architecture. It is exposed through a FastAPI REST API, visualized with Streamlit, and containerized with Docker.
 
 ---
 
-## System Architecture
+## Problem Statement
+
+Payment platforms process large volumes of transactions where risk detection must be accurate, responsive, and explainable.
+
+A practical system needs to detect both known fraud patterns and unusual behavior, while providing enough context for support, investigation, and operational teams to understand why a transaction was flagged.
+
+FraudGuard addresses this using a layered detection architecture combining supervised ML, anomaly detection, explainability, concurrent scoring, and deterministic decision logic.
+
+---
+
+## Architecture
+
+FraudGuard follows a layered pipeline from transaction ingestion to operational decision-making.
+
+![FraudGuard System Architecture](models/architecture.png)
+
+### Detection Flow
 
 ```text
-Incoming Transactions
-        |
-        v
-+-------------------------+
-| Ensemble Detection     |
-|                         |
-| XGBoost + Isolation     |
-| Forest                  |
-+-----------+-------------+
-            |
-            v
-       Risk Score
-            |
-       +----+----+
-       |         |
-    Normal     Flagged
-       |         |
-     Log/Skip    v
-             SHAP Analysis
-                 |
-                 v
-        Investigator Agent
-                 |
-                 v
-          Decision Agent
-                 |
-       +---------+---------+
-       |         |         |
-     ALLOW     REVIEW   AUTO-BLOCK
+Transaction Stream
+        ↓
+Concurrent Scoring
+        ↓
+Ensemble Detection
+   ┌────┴─────┐
+XGBoost   Isolation Forest
+   └────┬─────┘
+        ↓
+Combined Risk Score
+        ↓
+SHAP Explanation
+        ↓
+Investigator Agent
+        ↓
+Decision Agent
+        ↓
+ALLOW / FLAG FOR REVIEW / AUTO-BLOCK
