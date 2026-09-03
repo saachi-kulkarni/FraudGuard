@@ -1,60 +1,57 @@
 # FraudGuard
 
-FraudGuard is a fraud detection project that uses machine learning to identify suspicious credit card transactions.
+FraudGuard is a real-time fraud detection system that combines supervised machine learning, anomaly detection, explainability, concurrent transaction processing, and an investigation/decision layer.
 
-The project combines XGBoost for supervised fraud detection with Isolation Forest for anomaly detection. Flagged transactions are then explained using SHAP and passed through a simple investigation and decision layer.
-
-## What the project does
-
-- Detects fraudulent transactions using XGBoost
-- Detects unusual transactions using Isolation Forest
-- Combines both models into a risk score
-- Handles class imbalance using SMOTE
-- Compares SMOTE with `scale_pos_weight`
-- Uses SHAP to explain predictions
-- Simulates a stream of incoming transactions
-- Supports concurrent transaction scoring
-- Provides an Investigator Agent and Decision Agent
-- Has a deterministic fallback when an external LLM is unavailable
-- Provides a FastAPI REST API
-- Provides a Streamlit dashboard
-- Includes Docker support
+The goal is to detect known fraud patterns with XGBoost while also using Isolation Forest to identify unusual transactions that may not match previously seen fraud patterns.
 
 ---
 
-## Project Architecture
+## Features
+
+- XGBoost fraud classification
+- Class imbalance handling with `scale_pos_weight`
+- Isolation Forest anomaly detection
+- Ensemble risk scoring
+- SHAP-based explanations
+- Concurrent transaction processing
+- Throughput benchmarking
+- Investigator and Decision agents
+- Deterministic fallback when an LLM is unavailable
+- FastAPI REST API
+- Streamlit dashboard
+- Docker support
+
+---
+
+## System Architecture
 
 ```text
-Transaction
-     |
-     v
-Transaction Stream
-     |
-     v
-+-----------------------+
-|   Detection Layer     |
-|                       |
-|  XGBoost              |
-|  Isolation Forest     |
-+----------+------------+
-           |
-           v
-     Risk Score
-           |
-           v
-     Is Fraudulent?
-       /        \
-     No          Yes
-     |            |
-     v            v
-   Allow       SHAP
-                  |
-                  v
+Incoming Transactions
+        |
+        v
++-------------------------+
+| Ensemble Detection     |
+|                         |
+| XGBoost + Isolation     |
+| Forest                  |
++-----------+-------------+
+            |
+            v
+       Risk Score
+            |
+       +----+----+
+       |         |
+    Normal     Flagged
+       |         |
+     Log/Skip    v
+             SHAP Analysis
+                 |
+                 v
         Investigator Agent
-                  |
-                  v
+                 |
+                 v
           Decision Agent
-                  |
-        +---------+---------+
-        |         |         |
-      ALLOW     REVIEW   AUTO-BLOCK
+                 |
+       +---------+---------+
+       |         |         |
+     ALLOW     REVIEW   AUTO-BLOCK

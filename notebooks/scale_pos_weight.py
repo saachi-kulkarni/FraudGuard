@@ -1,5 +1,6 @@
 import pandas as pd
-from xgboost import XGBClassifier
+import joblib
+
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
     precision_score,
@@ -7,7 +8,11 @@ from sklearn.metrics import (
     f1_score,
     average_precision_score
 )
+from imblearn.over_sampling import SMOTE
+from xgboost import XGBClassifier
 
+
+# Load data
 df = pd.read_csv("data/creditcard.csv")
 
 X = df.drop("Class", axis=1)
@@ -21,60 +26,99 @@ X_train, X_test, y_train, y_test = train_test_split(
     random_state=42
 )
 
-scale_pos_weight = (y_train == 0).sum() / (y_train == 1).sum()
 
-print(f"\nScale Pos Weight: {scale_pos_weight:.2f}")
+# Common parameters
+params = {
+    "n_estimators": 300,
+    "max_depth": 6,
+    "learning_rate": 0.1,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "random_state": 42,
+    "eval_metric": "logloss"
+}
 
-model = XGBClassifier(
-    n_estimators=300,
-    max_depth=6,
-    learning_rate=0.05,
-    subsample=0.8,
-    colsample_bytree=0.8,
-    scale_pos_weight=scale_pos_weight,
-    objective="binary:logistic",
-    eval_metric="logloss",
-    random_state=42,
-    n_jobs=-1
+
+# -----------------------------
+# SMOTE
+# -----------------------------
+smote = SMOTE(random_state=42)
+
+X_smote, y_smote = smote.fit_resample(X_train, y_train)
+
+smote_model = XGBClassifier(**params)
+smote_model.fit(X_smote, y_smote)
+
+smote_prob = smote_model.predict_proba(X_test)[:, 1]
+smote_pred = (smote_prob >= 0.80).astype(int)
+
+
+# -----------------------------
+# scale_pos_weight
+# -----------------------------
+neg = (y_train == 0).sum()
+pos = (y_train == 1).sum()
+
+weight = neg / pos
+
+weighted_model = XGBClassifier(
+    **params,
+    scale_pos_weight=weight
 )
 
-model.fit(X_train, y_train)
+weighted_model.fit(X_train, y_train)
 
-probabilities = model.predict_proba(X_test)[:, 1]
+weighted_prob = weighted_model.predict_proba(X_test)[:, 1]
+weighted_pred = (weighted_prob >= 0.80).astype(int)
 
-predictions = (
-    probabilities >= 0.80
-).astype(int)
 
-precision = precision_score(
-    y_test,
-    predictions,
-    zero_division=0
+# -----------------------------
+# Results
+# -----------------------------
+results = []
+
+for name, pred, prob in [
+    ("XGBoost + SMOTE", smote_pred, smote_prob),
+    ("XGBoost + scale_pos_weight", weighted_pred, weighted_prob)
+]:
+    results.append({
+        "Model": name,
+        "Precision": precision_score(y_test, pred),
+        "Recall": recall_score(y_test, pred),
+        "F1": f1_score(y_test, pred),
+        "AUC-PR": average_precision_score(y_test, prob)
+    })
+
+
+results_df = pd.DataFrame(results)
+
+print("\n======================================")
+print("   SMOTE vs SCALE_POS_WEIGHT")
+print("======================================")
+
+print(f"\nscale_pos_weight = {weight:.2f}\n")
+print(results_df.round(4).to_string(index=False))
+
+
+# -----------------------------
+# Save winning model
+# -----------------------------
+best = results_df.loc[results_df["AUC-PR"].idxmax(), "Model"]
+
+if best == "XGBoost + scale_pos_weight":
+    joblib.dump(weighted_model, "models/fraud_model.pkl")
+    print("\nSaved winning model:")
+    print("models/fraud_model.pkl")
+else:
+    joblib.dump(smote_model, "models/fraud_model.pkl")
+    print("\nSaved winning model:")
+    print("models/fraud_model.pkl")
+
+
+# Save comparison
+results_df.to_csv(
+    "models/imbalance_comparison.csv",
+    index=False
 )
 
-recall = recall_score(
-    y_test,
-    predictions,
-    zero_division=0
-)
-
-f1 = f1_score(
-    y_test,
-    predictions,
-    zero_division=0
-)
-
-auc_pr = average_precision_score(
-    y_test,
-    probabilities
-)
-
-print("\n========== SCALE_POS_WEIGHT RESULTS ==========")
-print(f"Precision : {precision:.4f}")
-print(f"Recall    : {recall:.4f}")
-print(f"F1        : {f1:.4f}")
-print(f"AUC-PR    : {auc_pr:.4f}")
-
-print("\n========== COMPARISON ==========")
-print("SMOTE XGBoost AUC-PR : 0.8794")
-print(f"Weighted XGBoost     : {auc_pr:.4f}")
+print("\nSaved: models/imbalance_comparison.csv")

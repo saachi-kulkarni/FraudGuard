@@ -8,19 +8,18 @@ from sklearn.metrics import (
     f1_score,
     average_precision_score
 )
+from sklearn.ensemble import IsolationForest
+from xgboost import XGBClassifier
 
 
 # -----------------------------
 # Load data
 # -----------------------------
-
 df = pd.read_csv("data/creditcard.csv")
 
 X = df.drop("Class", axis=1)
 y = df["Class"]
 
-
-# Same test split used for evaluation
 X_train, X_test, y_train, y_test = train_test_split(
     X,
     y,
@@ -31,127 +30,85 @@ X_train, X_test, y_train, y_test = train_test_split(
 
 
 # -----------------------------
-# Load saved models
+# Common XGBoost parameters
 # -----------------------------
-
-xgb_model = joblib.load("models/fraud_model.pkl")
-if_model = joblib.load("models/isolation_forest.pkl")
-if_meta = joblib.load("models/isolation_forest_meta.pkl")
-config = joblib.load("models/ensemble_config.pkl")
+params = {
+    "n_estimators": 300,
+    "max_depth": 6,
+    "learning_rate": 0.1,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "random_state": 42,
+    "eval_metric": "logloss"
+}
 
 
 # -----------------------------
-# Get test-set scores
+# XGBoost + scale_pos_weight
 # -----------------------------
+neg = (y_train == 0).sum()
+pos = (y_train == 1).sum()
 
-xgb_scores = xgb_model.predict_proba(X_test)[:, 1]
-
-raw_scores = -if_model.decision_function(X_test)
-
-if_scores = (
-    (raw_scores - if_meta["if_min"])
-    / (if_meta["if_max"] - if_meta["if_min"])
+xgb = XGBClassifier(
+    **params,
+    scale_pos_weight=neg / pos
 )
 
-if_scores = if_scores.clip(0, 1)
+xgb.fit(X_train, y_train)
 
-ensemble_scores = (
-    config["xgb_weight"] * xgb_scores
-    + config["if_weight"] * if_scores
+xgb_prob = xgb.predict_proba(X_test)[:, 1]
+xgb_pred = (xgb_prob >= 0.80).astype(int)
+
+
+# -----------------------------
+# Isolation Forest
+# -----------------------------
+iso = IsolationForest(
+    n_estimators=200,
+    contamination="auto",
+    random_state=42
 )
 
+iso.fit(X_train[y_train == 0])
+
+raw = -iso.decision_function(X_test)
+
+iso_min = raw.min()
+iso_max = raw.max()
+
+iso_score = (raw - iso_min) / (iso_max - iso_min)
+iso_pred = (iso_score >= 0.80).astype(int)
+
 
 # -----------------------------
-# Evaluation
+# Ensemble
 # -----------------------------
+risk = 0.7 * xgb_prob + 0.3 * iso_score
+ensemble_pred = (risk >= 0.80).astype(int)
 
-def evaluate(name, scores, threshold):
 
-    predictions = (
-        scores >= threshold
-    ).astype(int)
-
-    precision = precision_score(
-        y_test,
-        predictions,
-        zero_division=0
-    )
-
-    recall = recall_score(
-        y_test,
-        predictions,
-        zero_division=0
-    )
-
-    f1 = f1_score(
-        y_test,
-        predictions,
-        zero_division=0
-    )
-
-    auc_pr = average_precision_score(
-        y_test,
-        scores
-    )
-
+# -----------------------------
+# Metrics
+# -----------------------------
+def metrics(name, pred, score):
     print(f"\n{name}")
-    print(f"Precision : {precision:.4f}")
-    print(f"Recall    : {recall:.4f}")
-    print(f"F1        : {f1:.4f}")
-    print(f"AUC-PR    : {auc_pr:.4f}")
+    print(f"Precision : {precision_score(y_test, pred):.4f}")
+    print(f"Recall    : {recall_score(y_test, pred):.4f}")
+    print(f"F1        : {f1_score(y_test, pred):.4f}")
+    print(f"AUC-PR    : {average_precision_score(y_test, score):.4f}")
 
-    return {
-        "Model": name,
-        "Precision": precision,
-        "Recall": recall,
-        "F1": f1,
-        "AUC-PR": auc_pr
-    }
-
-
-# -----------------------------
-# Compare
-# -----------------------------
-
-results = []
-
-results.append(
-    evaluate("XGBoost", xgb_scores, 0.80)
-)
-
-results.append(
-    evaluate("Isolation Forest", if_scores, 0.80)
-)
-
-results.append(
-    evaluate(
-        "Ensemble",
-        ensemble_scores,
-        config["threshold"]
-    )
-)
-
-
-# -----------------------------
-# Save results
-# -----------------------------
-
-comparison = pd.DataFrame(results)
 
 print("\n======================================")
-print("       TEST-SET ABLATION")
+print("        FRAUDGUARD ABLATION")
 print("======================================")
 
-print(
-    comparison.to_string(
-        index=False,
-        float_format=lambda x: f"{x:.4f}"
-    )
-)
+metrics("XGBoost + scale_pos_weight", xgb_pred, xgb_prob)
+metrics("Isolation Forest", iso_pred, iso_score)
+metrics("Ensemble", ensemble_pred, risk)
 
-comparison.to_csv(
-    "models/ablation_results.csv",
-    index=False
-)
-
-print("\nSaved: models/ablation_results.csv")
+print("\n======================================")
+print("        COMPARISON")
+print("======================================")
+print("XGBoost handles known fraud patterns.")
+print("Isolation Forest detects anomalous behavior.")
+print("The ensemble combines both signals.")
